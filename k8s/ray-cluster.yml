@@ -1,0 +1,220 @@
+# Ray head node service, allowing worker pods to discover the head node.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-head
+spec:
+  ports:
+    # Port for ray head node.
+    - name: redis-primary
+      port: 6379
+      targetPort: 6379
+
+    # Ray internal communication ports.
+    - name: object-manager
+      port: 12345
+      targetPort: 12345
+    - name: node-manager
+      port: 12346
+      targetPort: 12346
+
+    # Dashboard port.
+    - name: dashboard
+      port: 8265
+      targetPort: 8265
+
+    # Worker ports.
+    - name: worker-port-0
+      port: 11000
+      targetPort: 11000
+    - name: worker-port-1
+      port: 11001
+      targetPort: 11001
+    - name: worker-port-2
+      port: 11002
+      targetPort: 11002
+    - name: worker-port-3
+      port: 11003
+      targetPort: 11003
+
+  selector:
+    component: ray-head
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-head
+spec:
+  # Do not change this - Ray currently only supports one head node per cluster.
+  replicas: 1
+  selector:
+    matchLabels:
+      component: ray-head
+      type: ray
+  template:
+    metadata:
+      labels:
+        component: ray-head
+        type: ray
+    spec:
+      # If the head node goes down, the entire cluster (including all worker
+      # nodes) will go down as well. If you want Kubernetes to bring up a new
+      # head node in this case, set this to "Always," else set it to "Never."
+      restartPolicy: Always
+      # This volume allocates shared memory for Ray to use for its plasma
+      # object store. If you do not provide this, Ray will fall back to
+      # /tmp which cause slowdowns if is not a shared memory volume.
+      volumes:
+      - name: ssh-volume
+        configMap:
+          name: ssh-config
+      - name: rhyme-generator-pvc
+        persistentVolumeClaim:
+          claimName: rhyme-generator-pvc
+      - name: publicfs
+        flexVolume:
+          driver: ceph.rook.io/rook
+          fsType: ceph
+          options:
+            fsName: home
+            clusterNamespace: rook-ceph
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      containers:
+        - name: ray-head
+          image: bogdankostic/transformers-ray:latest
+          imagePullPolicy: Always
+          command: [ "/bin/bash", "-c", "--" ]
+          args:
+            - "/usr/sbin/sshd -D & ray start --head --node-ip-address=$MY_POD_IP --port=6379 --object-manager-port=12345 --node-manager-port=12346 --min-worker-port=11000 --max-worker-port=11003 --dashboard-port=8265 --num-cpus=$MY_CPU_REQUEST --block"
+          ports:
+            - containerPort: 6379
+            - containerPort: 12345
+            - containerPort: 12346
+            - containerPort: 8265
+            - containerPort: 11000
+            - containerPort: 11001
+            - containerPort: 11002
+            - containerPort: 11003
+
+          # This volume allocates shared memory for Ray to use for its plasma
+          # object store. If you do not provide this, Ray will fall back to
+          # /tmp which cause slowdowns if is not a shared memory volume.
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: publicfs
+              mountPath: /pvc/publicfs
+            - name: ssh-volume
+              subPath: sshd_config
+              mountPath: /etc/ssh/sshd_config
+            - name: ssh-volume
+              subPath: authorized_keys
+              mountPath: /root/.ssh/authorized_keys
+            - name: rhyme-generator-pvc
+              mountPath: /pvc
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+
+            # This is used in the ray start command so that Ray can spawn the
+            # correct number of processes. Omitting this may lead to degraded
+            # performance.
+            - name: MY_CPU_REQUEST
+              valueFrom:
+                resourceFieldRef:
+                  resource: requests.cpu
+          resources:
+            requests:
+              cpu: 1000m
+            limits:
+              memory: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-worker
+spec:
+  # Change this to scale the number of worker nodes started in the Ray cluster.
+  replicas: 4
+  selector:
+    matchLabels:
+      component: ray-worker
+      type: ray
+  template:
+    metadata:
+      labels:
+        component: ray-worker
+        type: ray
+    spec:
+      restartPolicy: Always
+      nodeSelector:
+        gpu: a100
+      volumes:
+      - name: ssh-volume
+        configMap:
+          name: ssh-config
+      - name: rhyme-generator-pvc
+        persistentVolumeClaim:
+          claimName: rhyme-generator-pvc
+      - name: publicfs
+        flexVolume:
+          driver: ceph.rook.io/rook
+          fsType: ceph
+          options:
+            fsName: home
+            clusterNamespace: rook-ceph
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      containers:
+      - name: ray-worker
+        image: bogdankostic/transformers-ray:latest
+        imagePullPolicy: Always
+        command: ["/bin/bash", "-c", "--"]
+        args:
+          - "ray start --node-ip-address=$MY_POD_IP --address=$RAY_HEAD_SERVICE_HOST:6379 --object-manager-port=12345 --node-manager-port=12346 --min-worker-port=11000 --max-worker-port=11999 --num-cpus=$MY_CPU_REQUEST --block"
+        ports:
+          - containerPort: 12345 # Ray internal communication.
+          - containerPort: 12346 # Ray internal communication.
+          - containerPort: 11000
+          - containerPort: 11001
+          - containerPort: 11002
+          - containerPort: 11003
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: publicfs
+            mountPath: /pvc/publicfs
+          - name: ssh-volume
+            subPath: sshd_config
+            mountPath: /etc/ssh/sshd_config
+          - name: ssh-volume
+            subPath: authorized_keys
+            mountPath: /root/.ssh/authorized_keys
+          - name: rhyme-generator-pvc
+            mountPath: /pvc
+        env:
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+
+          # This is used in the ray start command so that Ray can spawn the
+          # correct number of processes. Omitting this may lead to degraded
+          # performance.
+          - name: MY_CPU_REQUEST
+            valueFrom:
+              resourceFieldRef:
+                resource: requests.cpu
+        resources:
+          requests:
+            cpu: 4000m
+            memory: 12000Mi
+            nvidia.com/gpu: 1
+          limits:
+            memory: 32000Mi
+            nvidia.com/gpu: 1

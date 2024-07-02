@@ -1,3 +1,9 @@
+cmudict
+datasets
 pandas
-transformers[torch]
+ray[tune, default]
 scikit-learn
+transformers[torch]
+tensorboard
+torchmetrics
+hyperopt

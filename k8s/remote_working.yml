@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transformers-ray
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transformers-ray
+  template:
+    metadata:
+      labels:
+        app: transformers-ray
+    spec:
+      containers:
+        - image: bogdankostic/transformers-ray:latest
+          name: transformers-ray
+          volumeMounts:
+            - name: ssh-volume
+              subPath: sshd_config
+              mountPath: /etc/ssh/sshd_config
+            - name: ssh-volume
+              subPath: authorized_keys
+              mountPath: /root/.ssh/authorized_keys
+            - name: rhyme-generator-pvc
+              mountPath: /pvc
+          ports:
+            - containerPort: 22
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+      nodeSelector:
+        gpu: p100
+      volumes:
+        - name: ssh-volume
+          configMap:
+            name: ssh-config
+        - name: rhyme-generator-pvc
+          persistentVolumeClaim:
+            claimName: rhyme-generator-pvc

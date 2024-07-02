@@ -76,11 +76,11 @@ def extract_rhyme_pairs(directory: str, output_file: str):
                             title.append(cur_title)
                             reversed_.append(True)
 
-
     df = pd.DataFrame({"verse_a": verse_a, "verse_b": verse_b, "author": author, "title": title, "reversed": reversed_})
 
     # Deduplicate the dataframe
     df = df.drop_duplicates()
+    df = df.dropna(subset=["verse_a", "verse_b"])
 
     # Save as csv
     output_dir = os.path.dirname(output_file)
@@ -103,6 +103,9 @@ def train_test_dev_split(input_file: str, output_dir: str, train_size: float = 0
     df = pd.read_csv(input_file)
     train, test_dev = train_test_split(df, train_size=train_size, random_state=random_state)
     test, dev = train_test_split(test_dev, train_size=1 - (test_size / (1 - train_size)), random_state=random_state)
+    train = train.dropna(subset=["verse_a", "verse_b"])
+    test = test.dropna(subset=["verse_a", "verse_b"])
+    dev = dev.dropna(subset=["verse_a", "verse_b"])
 
     train_output = os.path.join(output_dir, "train.csv")
     test_output = os.path.join(output_dir, "test.csv")
